@@ -142,3 +142,9 @@ __all__ = [
     'is_isolated_pty',
     'is_real_uart',
 ]
+
+# Re-export the safe DTR/RTS configuration helper from serial_no_reset.
+# 从 serial_no_reset 重新导出安全的 DTR/RTS 配置辅助函数。
+from .serial_no_reset import UNCHANGED, configure_no_reset  # noqa: E402
+
+__all__ += ['UNCHANGED', 'configure_no_reset']

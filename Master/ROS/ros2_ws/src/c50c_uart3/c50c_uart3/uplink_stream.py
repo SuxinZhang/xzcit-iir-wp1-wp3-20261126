@@ -34,6 +34,8 @@ class UplinkStreamParser:
                     kind, length, tail = 'status', 50, 0x7d
             elif self._buf[1] == 0x7e:
                 kind, length, tail = 'ext_status', 11, 0x7e
+            elif self._buf[1] == 0x06:
+                kind, length, tail = 'version', 18, 0x7e
             elif self._buf[1] == 0x7d:
                 kind, length, tail = 'dock_target', 14, 0x7e
             else:
