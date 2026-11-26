@@ -69,6 +69,11 @@ extern "C" {
 #define IIR_PROTO_CMD_DOCK_TARGET 0x7Du
 #define IIR_PROTO_DOCK_TARGET_FRAME_LEN 14u
 
+/** Version telemetry frame type and fixed 18-byte length for OTA verification.
+ *  用于 OTA 版本校验的版本遥测帧类型与固定 18 字节长度。 */
+#define IIR_PROTO_CMD_VERSION 0x06u
+#define IIR_PROTO_VERSION_FRAME_LEN 18u
+
 /** Frame end delimiter byte (0x7E) for 11-byte extended telemetry frames.
  *  11 字节扩展安全与回充遥测帧的帧尾定界字节（0x7E）。 */
 #define IIR_PROTO_EXT_TAIL 0x7Eu
@@ -176,6 +181,18 @@ typedef struct {
      *  归一化高有效 D50A RS485 驱动器故障掩码（bit7 表示 RS485 离线）。 */
     uint8_t d50a_alarm_mask;
 } IIR_ExtStatusFrame;
+
+/**
+ * @brief Firmware version metadata carried by the 18-byte version telemetry frame.
+ *        18 字节版本遥测帧承载的固件版本元数据。
+ */
+typedef struct {
+    uint8_t major;
+    uint8_t minor;
+    uint8_t patch;
+    uint8_t chassis_type;
+    uint32_t git_sha_u32;
+} IIR_FwVersionFrame;
 
 /** One atomic infrared target snapshot.
  *  一份原子的红外目标快照。 */
@@ -455,6 +472,9 @@ bool IIR_Proto_EncodeSessionFrame(uint32_t session_id,
  */
 bool IIR_Proto_EncodeExtStatusFrame(const IIR_ExtStatusFrame *frame,
                                      uint8_t out_buf[IIR_PROTO_CMD_FRAME_LEN]);
+
+bool IIR_Proto_EncodeVersionFrame(const IIR_FwVersionFrame *version,
+                                  uint8_t out_buf[IIR_PROTO_VERSION_FRAME_LEN]);
 
 /**
  * @brief Decode an 11-byte uplink extended safety and auto-dock telemetry frame (0x7C..0x7E).

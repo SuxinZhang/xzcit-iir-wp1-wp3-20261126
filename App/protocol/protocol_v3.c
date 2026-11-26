@@ -177,6 +177,25 @@ bool IIR_Proto_EncodeExtStatusFrame(const IIR_ExtStatusFrame *frame,
     return true;
 }
 
+bool IIR_Proto_EncodeVersionFrame(const IIR_FwVersionFrame *version,
+                                  uint8_t out_buf[IIR_PROTO_VERSION_FRAME_LEN])
+{
+    if (version == NULL || out_buf == NULL) {
+        return false;
+    }
+    out_buf[0] = IIR_PROTO_EXT_HEADER;
+    out_buf[1] = IIR_PROTO_CMD_VERSION;
+    out_buf[2] = IIR_PROTO_VERSION;
+    out_buf[3] = version->major;
+    out_buf[4] = version->minor;
+    out_buf[5] = version->patch;
+    out_buf[6] = version->chassis_type;
+    write_u32_be(&out_buf[7], version->git_sha_u32);
+    out_buf[16] = IIR_Proto_CheckBcc(out_buf, 16u);
+    out_buf[17] = IIR_PROTO_EXT_TAIL;
+    return true;
+}
+
 bool IIR_Proto_EncodeDockTargetFrame(const IIR_DockTargetFrame *target,
                                     uint8_t out_buf[IIR_PROTO_DOCK_TARGET_FRAME_LEN])
 {

@@ -47,3 +47,15 @@ add_test(
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_c50c_uart3_interop.py
           $<TARGET_FILE:proto_bridge_cli>
 )
+
+# Test 6: Equivalent ROS speed/mode regression after legacy fw_ros_* removal.
+# 测试 6：移除旧 fw_ros_* 模型后的等效 ROS 速度/模式回归。
+add_executable(test_ros_equivalence test_ros_equivalence.c)
+target_link_libraries(test_ros_equivalence PRIVATE iir_kinematics iir_control iir_app_warnings m)
+add_test(NAME test_ros_equivalence COMMAND test_ros_equivalence)
+
+# Test 7: 18-byte firmware version telemetry used by the OTA agent.
+# 测试 7：OTA 代理使用的 18 字节固件版本遥测帧。
+add_executable(test_version_frame test_version_frame.c)
+target_link_libraries(test_version_frame PRIVATE iir_protocol iir_app_warnings)
+add_test(NAME test_version_frame COMMAND test_version_frame)

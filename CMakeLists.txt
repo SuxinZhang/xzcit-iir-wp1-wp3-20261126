@@ -65,6 +65,29 @@ target_link_libraries(iir_control
   PRIVATE iir_app_warnings
 )
 
+# Firmware version metadata injection for OTA and heartbeat reporting.
+# 用于 OTA 与心跳上报的固件版本元数据注入。
+set(IIR_FW_VERSION "1.0.0" CACHE STRING "Firmware semantic version MAJOR.MINOR.PATCH")
+string(REPLACE "." ";" IIR_FW_VERSION_PARTS "${IIR_FW_VERSION}")
+list(GET IIR_FW_VERSION_PARTS 0 IIR_FW_VERSION_MAJOR)
+list(GET IIR_FW_VERSION_PARTS 1 IIR_FW_VERSION_MINOR)
+list(GET IIR_FW_VERSION_PARTS 2 IIR_FW_VERSION_PATCH)
+execute_process(
+  COMMAND git rev-parse --short=8 HEAD
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  OUTPUT_VARIABLE IIR_GIT_SHA
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+  ERROR_QUIET
+)
+if(NOT IIR_GIT_SHA)
+  set(IIR_GIT_SHA "00000000")
+endif()
+configure_file(
+  ${CMAKE_CURRENT_SOURCE_DIR}/App/protocol/fw_version.h.in
+  ${CMAKE_CURRENT_BINARY_DIR}/generated/fw_version.h
+  @ONLY
+)
+
 # Pure-C protocol_v3 encoder/decoder and command watchdog (byte-compatible with c50c_uart3).
 # 纯 C protocol_v3 帧编解码器与指令看门狗静态库（与 c50c_uart3 字节级兼容）。
 add_library(iir_protocol STATIC
@@ -72,6 +95,7 @@ add_library(iir_protocol STATIC
 )
 target_include_directories(iir_protocol PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/App/protocol
+  ${CMAKE_CURRENT_BINARY_DIR}/generated
 )
 target_link_libraries(iir_protocol
   PRIVATE iir_app_warnings
@@ -200,6 +224,7 @@ if(CMAKE_CROSSCOMPILING)
   set_target_properties(iir_tasks PROPERTIES C_EXTENSIONS ON)
   target_include_directories(iir_tasks PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/App/tasks
+    ${CMAKE_CURRENT_BINARY_DIR}/generated
   )
   target_link_libraries(iir_tasks
     PUBLIC iir_bsp iir_kinematics iir_control iir_protocol iir_safety iir_hal_freertos
@@ -234,6 +259,13 @@ if(CMAKE_CROSSCOMPILING)
   target_link_options(xzcit_iir_diff.elf PRIVATE
     -T${IIR_LINKER_SCRIPT}
     -Wl,-Map=${CMAKE_CURRENT_BINARY_DIR}/xzcit_iir_diff.map,--cref
+    # Pull the newlib syscall stubs from syscalls.c so libc_nano does not warn
+    # about missing _read/_write/_close/_lseek in the bare-metal image.
+    # 强制拉入 syscalls.c 的 newlib 桩，避免裸机镜像链接器提示 _read/_write/_close/_lseek 未实现。
+    -Wl,--undefined=_read
+    -Wl,--undefined=_write
+    -Wl,--undefined=_close
+    -Wl,--undefined=_lseek
   )
 
   iir_add_firmware_outputs(xzcit_iir_diff.elf)

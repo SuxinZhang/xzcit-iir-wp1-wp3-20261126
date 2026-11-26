@@ -2,6 +2,12 @@
  * @file main.c
  * @brief Clean STM32CubeMX HAL entry point for XZCIT-IIR differential chassis firmware.
  *        XZCIT-IIR 差速底盘固件的洁净 STM32CubeMX HAL 主程序入口。
+ *
+ * @note `C50C_HAL.ioc` is retained only as the initial pin-map reference. CubeMX
+ *       regeneration of `Core/` is forbidden; CMake and the checked-in sources are
+ *       the single source of truth.
+ *       说明：`C50C_HAL.ioc` 仅保留作为初始引脚映射参考；禁止用 CubeMX 覆写 `Core/`，
+ *       CMake 与仓库内源码才是唯一事实来源。
  */
 
 #include "main.h"

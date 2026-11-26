@@ -24,12 +24,14 @@
 #include "motor_control.h"
 #include "oled/bsp_oled.h"
 #include "protocol_v3.h"
+#include "fw_version.h"
 #include "safety_manager.h"
 #include "sos_button/bsp_sos.h"
 #include "uartx/bsp_uartx.h"
 
 #include <math.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* Task periods and safety thresholds aligned to AI_EXECUTION_PLAN Invariants 2 and 3.
@@ -380,6 +382,20 @@ static void telemetry_task(void *arg)
                 (void)BSP_Uart3_SendAsync(sess_buf, (uint16_t)sizeof(sess_buf));
             }
             BSP_Oled_ShowStatus(snap.voltage_mv, allowed, snap.vx_mm_s);
+        } else if (slot_tick == (IIR_SESSION_BEACON_TICKS - 2u)) {
+            /* Send version telemetry once per 20 ticks (1 s) for OTA verification.
+             * 每 20 个 tick（1 秒）发送一次版本遥测，供 OTA 校验。 */
+            IIR_FwVersionFrame version = {
+                .major = (uint8_t)IIR_FW_VERSION_MAJOR,
+                .minor = (uint8_t)IIR_FW_VERSION_MINOR,
+                .patch = (uint8_t)IIR_FW_VERSION_PATCH,
+                .chassis_type = (uint8_t)(strcmp(IIR_CHASSIS_TYPE, "DIFF") == 0 ? 0u : 1u),
+                .git_sha_u32 = (uint32_t)strtoul(IIR_GIT_SHA, NULL, 16),
+            };
+            uint8_t version_buf[IIR_PROTO_VERSION_FRAME_LEN];
+            if (IIR_Proto_EncodeVersionFrame(&version, version_buf)) {
+                (void)BSP_Uart3_SendAsync(version_buf, (uint16_t)sizeof(version_buf));
+            }
         } else if ((slot_tick % 2u) == 0u) {
             uint8_t ext_buf[IIR_PROTO_CMD_FRAME_LEN];
             if (IIR_Proto_EncodeExtStatusFrame(&ext_snap, ext_buf)) {
