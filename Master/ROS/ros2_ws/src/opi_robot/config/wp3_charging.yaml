@@ -1,0 +1,16 @@
+# Fill measured site parameters before enabling autonomous charging.
+# 启用自主回充前填写实测现场参数。
+web_debug:
+  ros__parameters:
+    enable_autonomous_charging: false
+    charging_prep_x_m: .nan
+    charging_prep_y_m: .nan
+    charging_prep_yaw_rad: .nan
+    charging_low_voltage_v: .nan
+    charging_min_current_ma: .nan
+    charging_current_tolerance_ma: .nan
+    charging_stable_window_s: .nan
+    charging_undock_distance_m: .nan
+    charging_undock_speed_m_s: .nan
+    charging_undock_timeout_s: .nan
+    charging_confirmation_timeout_s: .nan

@@ -1,0 +1,36 @@
+# EditorConfig configuration for XZCIT-IIR / inspection-robot.
+# XZCIT-IIR / inspection-robot 仓库的 EditorConfig 全局编码与格式规范。
+# Enforce UTF-8 (without BOM) and Unix LF line endings across all platforms.
+# 在所有平台上强制使用无 BOM 的 UTF-8 编码与 Unix LF 换行符。
+
+root = true
+
+[*]
+# Use UTF-8 without BOM and LF line endings globally (AI_EXECUTION_PLAN Section 1.1).
+# 全局强制使用无 BOM UTF-8 与 LF 换行符（参见 AI_EXECUTION_PLAN 第 1.1 节）。
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+[*.{yml,yaml,json,md,cmake}]
+# Use 2-space indentation for YAML, JSON, Markdown, and CMake modules.
+# 为 YAML、JSON、Markdown 与 CMake 模块文件设置 2 空格缩进。
+indent_size = 2
+
+[CMakeLists.txt]
+# Use 2-space indentation for CMakeLists.txt files.
+# 为 CMakeLists.txt 文件设置 2 空格缩进。
+indent_size = 2
+
+[*.{ts,tsx,js,css,html}]
+# Use 2-space indentation for Web frontend sources.
+# 为 Web 前端源码设置 2 空格缩进。
+indent_size = 2
+
+[Makefile]
+# Makefiles require hard tabs for recipe lines.
+# Makefile 规则行必须使用硬制表符（Tab）缩进。
+indent_style = tab

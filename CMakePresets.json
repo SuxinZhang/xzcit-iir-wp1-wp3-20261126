@@ -1,0 +1,71 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 22,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "stm32-diff-release",
+      "displayName": "STM32F407 Differential Release",
+      "description": "Cross-compile STM32F407VET6 differential chassis firmware (Release)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/stm32-diff-release",
+      "toolchainFile": "${sourceDir}/cmake/arm-none-eabi.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CHASSIS_TYPE": "DIFF",
+        "BUILD_HOST_TESTS": "OFF"
+      }
+    },
+    {
+      "name": "stm32-diff-debug",
+      "displayName": "STM32F407 Differential Debug",
+      "description": "Cross-compile STM32F407VET6 differential chassis firmware (Debug)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/stm32-diff-debug",
+      "toolchainFile": "${sourceDir}/cmake/arm-none-eabi.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CHASSIS_TYPE": "DIFF",
+        "BUILD_HOST_TESTS": "OFF"
+      }
+    },
+    {
+      "name": "host-test",
+      "displayName": "Host Unit Tests (Native GCC + CTest)",
+      "description": "Build and test pure-C kinematics, control, and protocol_v3 on host",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/host-test",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CHASSIS_TYPE": "DIFF",
+        "BUILD_HOST_TESTS": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "stm32-diff-release",
+      "configurePreset": "stm32-diff-release"
+    },
+    {
+      "name": "stm32-diff-debug",
+      "configurePreset": "stm32-diff-debug"
+    },
+    {
+      "name": "host-test",
+      "configurePreset": "host-test"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "host-test",
+      "configurePreset": "host-test",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

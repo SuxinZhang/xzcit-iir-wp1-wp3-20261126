@@ -1,0 +1,6 @@
+<library path="vision_obstacle_layer">
+  <class type="iir_navigation::VisionObstacleLayer"
+         base_class_type="nav2_costmap_2d::Layer">
+    <description>Rebuild a vision obstacle layer from the latest point cloud.</description>
+  </class>
+</library>
