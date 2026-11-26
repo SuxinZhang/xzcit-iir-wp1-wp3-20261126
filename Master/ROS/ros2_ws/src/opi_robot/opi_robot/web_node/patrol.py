@@ -254,11 +254,14 @@ class PatrolRunner:
     本类只决定"下一步做什么"；发目标、取消、发布状态都由 web_debug 做。
     """
 
-    def __init__(self, dispatch, cancel, lock_stop, now):
+    def __init__(self, dispatch, cancel, lock_stop, now, on_waypoint=None):
         self._dispatch = dispatch
         self._cancel = cancel
         self._lock_stop = lock_stop
         self._now = now
+        # Optional non-blocking hook fired after a waypoint navigation result succeeds.
+        # 航点导航结果成功后的可选非阻塞钩子（不参与安全/导航状态判定）。
+        self._on_waypoint = on_waypoint
         self.route = None
         self.state = 'idle'
         self.index = 0
@@ -614,6 +617,20 @@ class PatrolRunner:
         if status != 'succeeded':
             self._fail(reason or status or 'nav_failed')
             return
+        arrived_index = self.index
+        # Fire the optional capture hook before advancing; failures are isolated so
+        # a missing vision service can never block patrol or charging safety logic.
+        # 先触发可选抓拍钩子再推进；钩子失败被隔离，视觉服务离线不得阻塞巡逻或回充安全逻辑。
+        if self._on_waypoint is not None:
+            try:
+                point = self.route['points'][arrived_index]
+                self._on_waypoint(arrived_index, {
+                    'x': float(point[0]),
+                    'y': float(point[1]),
+                    'yaw': float(point[2]),
+                })
+            except Exception:          # noqa: BLE001
+                pass
         self.index += 1
         if self.index >= len(self.route['points']):
             self.index = 0

@@ -27,7 +27,7 @@ TARGET_EXTENSIONS: frozenset[str] = frozenset({
     ".py", ".rs",
     ".ts", ".tsx", ".js", ".css", ".html",
     ".yaml", ".yml", ".xml", ".json",
-    ".cmake", ".md", ".sh",
+    ".cmake", ".md", ".sh", ".service", ".toml", ".txt",
 })
 
 # Exact filenames (without relying on suffix) subject to enforcement.

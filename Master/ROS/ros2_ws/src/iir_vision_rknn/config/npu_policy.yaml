@@ -1,0 +1,14 @@
+# RK3588S NPU core allocation policy.
+# RK3588S NPU 核心分配策略。
+# core_mask values follow RKNN Toolkit Lite2: core0=0x1, core1=0x2, core2=0x4.
+# core_mask 取值遵循 RKNN Toolkit Lite2：core0=0x1、core1=0x2、core2=0x4。
+inspection:
+  # Keep the electrical-defect detector off navigation core 0.
+  # 将电力缺陷检测与导航 core 0 隔离。
+  core_mask: 0x6
+  activation: on_demand
+navigation:
+  # Perception/avoidance inference owns core 0 for deterministic latency.
+  # 感知与避障推理独占 core 0，保证确定性延迟。
+  core_mask: 0x1
+  activation: continuous

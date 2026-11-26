@@ -266,18 +266,7 @@ class TestPointExpiry:
 
     def test_launch_expires_unvisited_angle_after_half_second(
             self, mono, monkeypatch):
-        launch = types.ModuleType('launch')
-        launch.LaunchDescription = lambda actions: actions
-        actions = types.ModuleType('launch.actions')
-        actions.DeclareLaunchArgument = lambda *args, **kwargs: None
-        substitutions = types.ModuleType('launch.substitutions')
-        substitutions.LaunchConfiguration = lambda name: name
-        launch_ros = types.ModuleType('launch_ros')
-        ros_actions = types.ModuleType('launch_ros.actions')
-        ros_actions.Node = lambda **kwargs: types.SimpleNamespace(**kwargs)
-        for module in (launch, actions, substitutions, launch_ros, ros_actions):
-            monkeypatch.setitem(sys.modules, module.__name__, module)
-
+        pytest.importorskip('launch_ros.parameter_descriptions')
         launch_file = os.path.join(os.path.dirname(os.path.dirname(__file__)),
                                    'launch', 'robot.launch.py')
         nodes = runpy.run_path(launch_file)['generate_launch_description']()

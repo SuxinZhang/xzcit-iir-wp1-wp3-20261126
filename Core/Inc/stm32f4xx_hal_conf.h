@@ -22,6 +22,8 @@ extern "C" {
 #define HAL_GPIO_MODULE_ENABLED
 #define HAL_PWR_MODULE_ENABLED
 #define HAL_RCC_MODULE_ENABLED
+/* The CAN auto-dock BSP drives bxCAN registers directly; no HAL CAN source file is required.
+ * CAN 自动回充 BSP 直接操作 bxCAN 寄存器，因此不需要 HAL CAN 源文件。 */
 #define HAL_TIM_MODULE_ENABLED
 #define HAL_UART_MODULE_ENABLED
 
@@ -81,7 +83,6 @@ extern "C" {
 #define USE_HAL_DSI_REGISTER_CALLBACKS         0U
 #define USE_HAL_ETH_REGISTER_CALLBACKS         0U
 #define USE_HAL_HASH_REGISTER_CALLBACKS        0U
-#define USE_HAL_HCD_REGISTER_CALLBACKS         0U
 #define USE_HAL_I2C_REGISTER_CALLBACKS         0U
 #define USE_HAL_FMPI2C_REGISTER_CALLBACKS      0U
 #define USE_HAL_FMPSMBUS_REGISTER_CALLBACKS    0U

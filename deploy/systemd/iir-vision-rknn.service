@@ -1,0 +1,13 @@
+[Unit]
+PartOf=iir.target
+Description=IIR RKNN inspection vision
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+EnvironmentFile=%h/.config/iir/wp5.env
+ExecStart=/usr/bin/env ${IIR_DEPLOY_DIR}/run-vision.sh
+
+[Install]
+WantedBy=default.target

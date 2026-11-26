@@ -20,6 +20,8 @@ try {
 <link rel="stylesheet" href="/styles/tokens.css">
 <link rel="stylesheet" href="/styles/layout.css">
 <link rel="stylesheet" href="/styles/micro.css">
+<link rel="stylesheet" href="/styles/inspection.css">
+<link rel="stylesheet" href="/styles/ota.css">
 </head>
 <body>
 
@@ -38,6 +40,14 @@ try {
     <a href="#/control" class="nav-item" data-page="control">
       <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="none" stroke-width="1.6"/><circle cx="8" cy="8" r="2.4"/></svg>
       <span>控制</span>
+    </a>
+    <a href="#/inspection" class="nav-item" data-page="inspection">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="6.8" cy="6.8" r="4.2" fill="none" stroke-width="1.6"/><path d="M10 10l4 4" stroke-width="1.6" stroke-linecap="round"/></svg>
+      <span>巡检</span>
+    </a>
+    <a href="#/ota" class="nav-item" data-page="ota">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2v7M5 6l3 3 3-3M3 12.5h10" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span>系统升级</span>
     </a>
     <a href="#/logs" class="nav-item" data-page="logs">
       <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 3.5h10M3 6.5h10M3 9.5h7M3 12.5h5" stroke-width="1.6" stroke-linecap="round" fill="none"/></svg>
@@ -157,6 +167,17 @@ try {
           </div>
 
           <div class="ctl-pane" id="ctl-pane-manual" role="tabpanel" aria-labelledby="ctl-tab-manual">
+          <article class="card" data-card>
+            <h3>实时音频</h3>
+            <p>启用 WP5 音频模式后，原喇叭测试和录音回放不可用。</p>
+            <div class="btn-row">
+              <button id="interaction-intercom" class="btn ghost" type="button">双向对讲</button>
+              <button id="interaction-announcement" class="btn ghost" type="button">远程喊话</button>
+              <button id="interaction-audio-stop" class="btn ghost" type="button">结束音频</button>
+              <span id="interaction-audio-status" role="status">未连接</span>
+            </div>
+            <audio id="interaction-audio" autoplay></audio>
+          </article>
           <article class="card pad-card" data-card>
             <div class="pad">
               <button id="pad-fwd" class="pad-key" type="button" aria-label="前进" disabled>↑</button>
@@ -179,8 +200,14 @@ try {
 
           <article class="card cam-card" data-card>
             <h3>相机 <span class="st mono" id="cam-fps"></span></h3>
+            <div class="btn-row">
+              <button id="interaction-video-start" class="btn ghost" type="button">启动实时视频</button>
+              <button id="interaction-video-stop" class="btn ghost" type="button">结束实时视频</button>
+              <span id="interaction-video-status" role="status">未连接</span>
+            </div>
             <div class="cam-wrap">
               <canvas id="cam" width="640" height="360"></canvas>
+              <video id="interaction-video" autoplay playsinline muted hidden></video>
               <div class="radar-pip" aria-label="激光雷达画中画"><canvas id="radar"></canvas></div>
             </div>
             <div class="btn-row">
@@ -299,6 +326,82 @@ try {
       </div>
     </section>
 
+    <!-- ============ 巡检（WP4 缺陷识别与抓拍归档） ============ -->
+    <section class="page" id="page-inspection" aria-labelledby="page-title" inert>
+      <div class="page-inner">
+        <div class="ins-grid">
+          <article class="card" data-card>
+            <div class="ins-head">
+              <h3>最新巡检抓拍 <span class="st" id="ins-status">等待抓拍</span></h3>
+              <span class="spacer"></span>
+              <label class="field ins-point-field"><span>巡检点</span>
+                <input id="ins-point" type="text" placeholder="例如 A-01" maxlength="32">
+              </label>
+              <button id="ins-capture-btn" class="btn primary" type="button">立即抓拍</button>
+            </div>
+            <div class="ins-image-wrap" id="ins-empty">
+              <p>暂无巡检抓拍。点击「立即抓拍」触发 RKNN 缺陷识别。</p>
+            </div>
+            <img id="ins-image" class="ins-image" alt="巡检抓拍标注图" hidden>
+            <p class="map-note" id="ins-meta" hidden></p>
+          </article>
+          <article class="card" data-card>
+            <h3>缺陷研判 <span class="st" id="ins-count">0 项</span></h3>
+            <ul class="ins-defects" id="ins-defects"><li class="st">暂无数据</li></ul>
+          </article>
+        </div>
+        <article class="card" data-card>
+          <div class="ins-head">
+            <h3>巡检历史</h3>
+            <span class="spacer"></span>
+            <span class="st" id="ins-health">网关 —</span>
+          </div>
+          <ol class="ins-history" id="ins-history"><li class="st">暂无记录</li></ol>
+        </article>
+        <p class="ins-foot"><a href="/student" target="_blank" rel="noopener">打开学生智能终端 /student ↗</a></p>
+      </div>
+    </section>
+
+    <!-- ============ 系统升级（WP6 OTA） ============ -->
+    <section class="page" id="page-ota" aria-labelledby="page-title" inert>
+      <div class="page-inner">
+        <div class="ota-grid">
+          <article class="card" data-card>
+            <h3>STM32 底盘固件</h3>
+            <div class="ota-version"><span>当前版本</span><strong id="ota-fw-version">—</strong></div>
+          </article>
+          <article class="card" data-card>
+            <h3>上位机软件</h3>
+            <div class="ota-version"><span>当前版本</span><strong id="ota-master-version">—</strong></div>
+          </article>
+          <article class="card" data-card>
+            <h3>RKNN 缺陷模型</h3>
+            <div class="ota-version"><span>当前版本</span><strong id="ota-model-version">—</strong></div>
+          </article>
+        </div>
+        <div class="ins-grid">
+          <article class="card" data-card>
+            <h3>五重安全互锁 <span class="st" id="ota-busy">空闲</span></h3>
+            <ul class="ota-interlocks" id="ota-interlocks"><li class="st">加载中…</li></ul>
+          </article>
+          <article class="card" data-card>
+            <h3>离线升级包</h3>
+            <div class="ota-drop" id="ota-drop">拖拽 .tar.gz 升级包到此，或选择文件
+              <input id="ota-file" type="file" accept=".tar.gz,application/gzip">
+            </div>
+            <p class="map-note" id="ota-upload-result">尚未上传升级包</p>
+            <div class="btn-row">
+              <button id="ota-apply-btn" class="btn primary" type="button" disabled>开始升级</button>
+              <button id="ota-rollback-btn" class="btn" type="button">回滚上一版本</button>
+            </div>
+            <div class="ota-progress-track"><div class="ota-progress-bar" id="ota-progress-bar"></div></div>
+            <p class="map-note">阶段 <span id="ota-stage">—</span> · <span id="ota-progress">0%</span></p>
+            <pre class="ota-log" id="ota-log">等待操作…</pre>
+          </article>
+        </div>
+      </div>
+    </section>
+
     <!-- ============ 日志（免登录） ============ -->
     <section class="page" id="page-logs" aria-labelledby="page-title" inert>
       <div class="page-inner">
@@ -344,6 +447,9 @@ try {
 <script src="/js/canvas-radar.js"></script>
 <script src="/js/canvas-map.js"></script>
 <script src="/js/spotlight.js"></script>
+<script src="/js/inspection.js"></script>
+<script src="/js/ota.js"></script>
+<script src="/js/interaction.js"></script>
 <script src="/js/app.js"></script>
 </body>
 </html>

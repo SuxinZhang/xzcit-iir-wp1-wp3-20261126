@@ -14,11 +14,13 @@ CMD_AUTO_DOCK = 0x01
 CMD_DOCK_PERMISSION = 0x03
 CMD_SET_SOS = 0x04
 CMD_SET_LED_BEEP = 0x05
+CMD_VERSION = 0x06
 
 EXT_HEADER = 0x7C
 CMD_EXT_STATUS = 0x7E
 EXT_TAIL = 0x7E
 EXT_FRAME_LEN = 11
+VERSION_FRAME_LEN = 18
 
 
 def _to_int16_be(value: int, field_name: str) -> bytes:
@@ -220,6 +222,46 @@ class ExtTelemetryFrame:
         return bool(self.safety_flags & 0x20)
 
 
+@dataclass(frozen=True)
+class VersionTelemetry:
+    """Decoded 18-byte firmware version telemetry frame.
+    解码后的 18 字节固件版本遥测帧。
+    """
+
+    major: int
+    minor: int
+    patch: int
+    chassis_type: int
+    git_sha_u32: int
+    frame_bytes: bytes = b''
+
+    @property
+    def version(self) -> str:
+        """Return semantic version string.
+        返回语义化版本字符串。
+        """
+        return f'{self.major}.{self.minor}.{self.patch}'
+
+
+def decode_version_frame(frame: bytes) -> VersionTelemetry:
+    """Validate and decode one 18-byte version telemetry frame.
+    校验并解码一帧 18 字节版本遥测帧。
+    """
+    if len(frame) != VERSION_FRAME_LEN:
+        raise ValueError('version frame length must be 18')
+    if (frame[0] != EXT_HEADER or frame[1] != CMD_VERSION
+            or frame[2] != PROTO_VERSION or frame[17] != EXT_TAIL):
+        raise ValueError('invalid version frame header/tail')
+    if frame[16] != check_bcc(frame[:16]):
+        raise ValueError('invalid version frame BCC')
+    return VersionTelemetry(
+        major=frame[3], minor=frame[4], patch=frame[5],
+        chassis_type=frame[6],
+        git_sha_u32=int.from_bytes(frame[7:11], 'big'),
+        frame_bytes=frame,
+    )
+
+
 class ExtStatusFrameParser:
     """Streaming parser and byte-stream extractor for 11-byte 0x7C..0x7E extended frames.
     支持流式分段同步的 11 字节扩展安全与回充遥测帧（0x7C..0x7E）解析与剥离器。
@@ -338,11 +380,15 @@ __all__ = [
     'CMD_EXT_STATUS',
     'CMD_SET_LED_BEEP',
     'CMD_SET_SOS',
+    'CMD_VERSION',
     'EXT_FRAME_LEN',
     'EXT_HEADER',
     'EXT_TAIL',
+    'VERSION_FRAME_LEN',
     'ExtStatusFrameParser',
     'ExtTelemetryFrame',
+    'VersionTelemetry',
+    'decode_version_frame',
     'encode_auto_dock_frame',
     'encode_led_beep_frame',
     'encode_sos_frame',

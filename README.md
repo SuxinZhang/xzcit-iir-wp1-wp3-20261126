@@ -1,95 +1,101 @@
-# XZCIT-IIR WP1–WP3 基础工程快照
+# XZCIT-IIR 巡检机器人固件
 
-本仓库是 XZCIT-IIR 巡检机器人 **WP1–WP3 基础工程** 的本地快照，包含：
+基于 STM32F4（Cortex-M4F）+ FreeRTOS 的巡检机器人下位机固件工程。
+构建体系采用 CMake（替代原 Makefile），支持交叉编译与宿主机单元测试两条构建路径。
 
-- WP1：UTF-8/LF 编码门禁、CMake/CMakePresets、STM32F407 HAL + FreeRTOS 固件底座、`App/kinematics|control|protocol|tasks`
-- WP2：C50C-V4.3 硬件驱动（HC-SR04、ICM-20948、D50A、CAN 回充、SOS）、安全状态机、`protocol_v3_ext`
-- WP3：Nav2 三传感器代价地图、融合定位配置、两段式自主回充状态机、`wp3_charging.yaml`
-- `docs/`：两版任务书、《WP1–WP5 任务书对照与上机验证清单》、`WP3_IMPLEMENTATION.md`
+## C50C_HAL.ioc 冻结说明
 
-## 为什么拆成三个仓库
+`C50C_HAL.ioc` only records the initial CubeMX pin configuration and is not the build source of truth.
+Do **not** regenerate or overwrite `Core/` with CubeMX. All pin, clock, peripheral and FreeRTOS changes must be made in the checked-in CMake/C sources and reviewed as normal code.
 
-XZCIT-IIR 被拆为 **WP1–WP3 基础工程（本仓库）**、**WP4 视觉/Gateway/Web**、**WP5 音频/WebRTC/部署** 三个独立仓库，原因：
+`C50C_HAL.ioc` 仅记录初始 CubeMX 引脚配置，不是构建的唯一事实来源。**禁止**用 CubeMX 重新生成或覆写 `Core/`；所有引脚、时钟、外设与 FreeRTOS 变更必须在仓库内的 CMake/C 源码中修改并按普通代码评审。
 
-1. **运行环境不同**
-   - WP1–WP3 面向 STM32 固件、ROS 2 导航与回充，主要依赖 C/CMake/HAL 与 ROS 2。
-   - WP4 依赖 RK3588S NPU、RKNN Toolkit Lite2、Python FastAPI、OpenCV 与 Web-Next 前端。
-   - WP5 依赖 PulseAudio/WebRTC AEC、MediaMTX、Caddy、systemd/udev 与 Orange Pi 目标机。
-   把三者放在一个仓库会让固件构建被 Python/Node/媒体依赖污染，也会让一次小改动触发全部重测。
-
-2. **失败域与回滚边界不同**
-   - WP1–WP3 是安全底盘与导航基础，必须保持稳定、可烧录、可回滚。
-   - WP4 的模型、NPU 驱动、Web 页面可以单独迭代、单独回滚，不影响固件基线。
-   - WP5 的音频/部署是目标机系统层，适合独立版本化与独立安装/卸载。
-
-3. **验收与上机条件不同**
-   - WP1–WP3：需要 STM32 烧录、电机/传感器、Nav2/回充实车场景。
-   - WP4：需要真实 `.rknn` 模型、NPU 性能与浏览器联动。
-   - WP5：需要音频设备/AEC、MediaMTX/WebRTC、整机 systemd 冷启动。
-   分开后，每个仓库可以按自己的验收清单独立推进，不互相阻塞。
-
-4. **代码所有权更清晰**
-   - 基础仓库只保留 WP1–WP3 的可运行代码；WP4/WP5 以 **overlay** 形式放在各自仓库，避免目录、CI、依赖互相覆盖。
-
-## 仓库关系
+## 目录总览
 
 ```text
-WP1–WP3 基础工程（本仓库）
-        ↓ overlay
-WP4：iir_interfaces + iir_vision_rknn + Master/Gateway + Web-Next inspection/student
-        ↓ overlay
-WP5：iir_interaction + deploy/MediaMTX/audio + Web-Next interaction
+XZCIT-IIR/
+├── CMakeLists.txt               # 顶层固件 CMake（Debug/Release + 内存占用报告）
+├── CMakePresets.json            # 一键预设：stm32-diff-release / host-test
+├── cmake/                       # 交叉编译工具链
+├── Core/                        # CubeMX HAL 生成目录（保持不变）
+├── Drivers/
+│   ├── STM32F4xx_HAL_Driver/    # ST 官方 HAL 库
+│   └── BSP/                     # 板级支持包（一个外设一个子目录）
+├── App/                         # 应用层（与硬件解耦的可测试业务逻辑）
+└── tests/
+    └── firmware_unit/           # 宿主机单元测试
 ```
 
-- WP4：`https://github.com/SuxinZhang/xzcit-iir-wp4-20261126`
-- WP5：`https://github.com/SuxinZhang/xzcit-iir-wp5-20261126`
+## 各目录详细说明
 
-> WP4/WP5 仓库包含的是 **overlay 文件**，需要合并到本基础工程后才是完整可运行系统；不要在基础仓库中直接加入 WP4/WP5 的共享文件变更。
+### 根目录
 
-## 本仓库包含/不包含
+| 文件 | 说明 |
+|------|------|
+| `CMakeLists.txt` | 顶层固件构建脚本：支持 Debug/Release 双配置，链接完成后输出 Flash/RAM 内存占用报告 |
+| `CMakePresets.json` | 预设两条构建路径：`stm32-diff-release`（ARM 交叉编译固件）、`host-test`（宿主机跑单元测试） |
 
-包含：
+### cmake/
 
-- `App/`、`Core/`、`Drivers/`、`Middlewares/`、`cmake/`、`CMakeLists.txt`、`CMakePresets.json`
-- `tests/firmware_unit/`
-- `Master/ROS/ros2_ws/src/c50c_uart3`、`c50c_odom`、`opi_robot`
-- `Master/ROS/nav2`、`Master/ROS/config`
-- `Master/Web-Next` 的基线版本（不含 WP4 巡检页、学生端、interaction）
+| 文件 | 说明 |
+|------|------|
+| `arm-none-eabi.cmake` | GCC 交叉编译工具链定义：`arm-none-eabi-gcc`，Cortex-M4F 硬浮点（`-mfpu=fpv4-sp-d16 -mfloat-abi=hard`） |
 
-不包含：
+### Core/
 
-- `Master/Gateway/`
-- `Master/ROS/ros2_ws/src/iir_interfaces/`
-- `Master/ROS/ros2_ws/src/iir_vision_rknn/`
-- `Master/Web-Next/web/js/inspection.js`、`student.js`、`student.html`、`inspection.css`、`student.css`
-- WP5 的 `iir_interaction`、`deploy/`、Web-Next interaction
+CubeMX 生成的 HAL 工程目录，**已冻结**（禁止重新生成覆写）。包含 `main.c`、`stm32f4xx_it.c`（中断服务函数）、`FreeRTOSConfig.h` 等。用户代码只允许写在 `/* USER CODE BEGIN */` 与 `/* USER CODE END */` 注释区间内；所有引脚/时钟/外设变更必须直接修改仓库源码并走普通代码评审。
 
-## 本地验证摘要
+### Drivers/STM32F4xx_HAL_Driver/
 
-| 检查 | 结果 |
-| :--- | :--- |
-| `python3 scripts/check_encoding.py` | PASS（本快照构建时） |
-| `cmake --preset host-test` + CTest | 5/5 通过 |
-| `cmake --preset stm32-diff-release` | 通过，生成 `.elf/.hex/.bin` |
-| WP3 c50c 定向测试 | 19/19 |
-| WP3 `opi_robot` 回充/巡逻测试 | 78/78 |
-| WP3 Nav2 中继测试 | 3/3 |
+ST 官方 HAL 库源码，由 CubeMX 复制进工程，**禁止修改**。
 
-## 上机前必读
+### Drivers/BSP/（板级支持包）
 
-`docs/WP1-WP5_任务书对照与上机验证清单.md` 中所有带 `[板]`、`[车]`、`[ROS]`、`[模型]`、`[人工]` 的条目仍未完成。重点：
+每个外设一个子目录，`xxx.c` / `xxx.h` 配对成对放置。BSP 层是唯一允许调用 HAL/操作寄存器的位置。
 
-- WP1：烧录、OLED、时钟/FreeRTOS、四轮方向、`c50c_uart3` 串口直驱
-- WP2：PE9/PE11 超声波 20–200 cm、PE5 SOS 50 ms 停机、D50A/CAN 回充
-- WP3：相机标定/TF、1.3 m/s、0.8 m 转弯半径、`wp3_charging.yaml` 现场参数、完整回充闭环
-- 具体逐项见清单，不能以本地单元测试代替实车验收
+| 子目录 | 状态 | 说明 |
+|--------|------|------|
+| `hc_sr04/` | 【新增，PE9/PE11】 | 宽压版 HC-SR04 超声波测距：使用 `TIM1_CH1`（`PE9` ECHO）硬件输入捕获 + `PE11`（TRIG），停用冲突的原航模 `TIM1` 捕获逻辑 |
+| `icm20948/` | 【新增，替代 MPU6050】 | IMU 驱动：引脚 `PB8(SDA) / PB9(SCL) / PD3(INT)`；因 C50C-V4.3 原理图与 STM32F407 硬件 `I2C1` 物理反接，采用 400 kHz 开漏软件 I2C（DWT 节拍 + 总线恢复）。放置寄存器定义、初始化、姿态数据读取与融合接口 |
+| `d50a_rs485/` | 【迁移自 C50X】 | D50A 驱动器监控：USART2（PD5-TX / PD6-RX）轮询读取电流、温度、报警状态。放置 RS485 帧收发、解析、超时重连逻辑 |
+| `can_auto_dock/` | 【迁移自 C50X】 | 自动回充：CAN1（PD0-RX / PD1-TX），接收四路红外对管回充信号与充电电流状态。放置 CAN 报文过滤、回充状态判断 |
+| `sos_button/` | 【新增】 | 急停按钮：PE5 外部中断（EXTI）触发，联动声光报警——PD11 蜂鸣器 + AT8236 驱动 RGB。放置消抖、中断回调、报警控制 |
+| `motor/` | 【保留】 | 电机 PWM / 方向控制驱动 |
+| `encoder/` | 【保留】 | 编码器正交解码与测速 |
+| `oled/` | 【保留】 | OLED 屏显示驱动（含字库） |
+| `adc/` | 【保留】 | ADC 采集（电池电压等模拟量） |
+| `buzzer/` | 【保留】 | 蜂鸣器基础驱动 |
+| `bsp_RGBLight/` | 【保留】 | RGB 氛围灯驱动 |
+| `uartx/` | 【保留】 | 通用串口收发驱动（DMA + 空闲中断接收） |
 
-## 构建命令
+### App/（应用层）
 
-```bash
-python3 scripts/check_encoding.py
-cmake --preset host-test && cmake --build --preset host-test && ctest --preset host-test
-cmake --preset stm32-diff-release && cmake --build --preset stm32-diff-release
+与具体硬件解耦的业务逻辑，**禁止直接调用 HAL**，只能通过 BSP 接口访问外设——这是保证能在宿主机上跑单元测试的前提。
+
+| 子目录 | 状态 | 说明 |
+|--------|------|------|
+| `kinematics/` | 【从 balance_task.c 拆出】 | 纯 C 四轮差速运动学：期望 `vx / vw` → 四轮轮速解算，含 0.01 ~ 1.3 m/s 速度限幅。无任何 HAL 依赖 |
+| `control/` | 【从 balance_task.c 拆出】 | 控制链：增量式 PI 闭环、速度平滑滤波、**唯一的电机 PWM 输出口**（其他模块不得绕过它直接操作电机） |
+| `safety/` | 【新增】 | 安全状态机：急停 / SOS 按钮、上位机串口失联超时（> 500 ms，已移除 PS2 手柄控制与断链安全门）、电池欠压。本地优先策略——任何安全事件不依赖上位机即可触发停车与报警 |
+| `protocol/` | 保持对齐 | 与上位机（Master / ROS / c50c_uart3）对齐的 protocol_v3 帧编解码：帧头 0xAA55、Msg ID、负载、CRC16。纯 C 无硬件依赖 |
+| `tasks/` | 【精简】 | FreeRTOS 任务入口与调度：创建任务、设定优先级与栈大小，将 BSP 驱动与 App 模块组装起来 |
+
+### tests/firmware_unit/
+
+宿主机（PC）GCC 编译的单元测试，针对 App 下无硬件依赖的纯 C 模块：`kinematics`、`control`、`protocol`。通过 CMake 预设 `host-test` 一键编译运行，不依赖任何 HAL。
+
+## 分层约定
+
+```text
+tasks（调度入口）
+   │
+App/（kinematics / control / safety / protocol）   ← 纯 C，可单元测试
+   │
+Drivers/BSP/（外设驱动）                            ← 唯一可调用 HAL 的层
+   │
+Core/ + STM32F4xx_HAL_Driver/（CubeMX 生成，不改）
 ```
 
-> 本仓库是本地快照，不是原仓库，也未向原仓库推送。
+- **自上而下依赖**：`App` 只调用 `BSP` 接口，不碰 HAL；`BSP` 不反向依赖 `App`。
+- **单一输出口**：电机 PWM 只能经 `App/control` 输出；蜂鸣器/RGB 报警联动由 `App/safety` 统一裁决。
+- **可测试性**：新增业务逻辑优先写成纯 C 模块放入 `App/`，配套测试放入 `tests/firmware_unit/`。

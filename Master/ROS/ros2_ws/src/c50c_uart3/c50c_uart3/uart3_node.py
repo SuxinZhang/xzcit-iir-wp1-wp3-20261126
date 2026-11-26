@@ -87,11 +87,14 @@ from .odom_msg import OdomCandidate, OdomCandidateConfig
 from .protocol_v3_ext import (
     ExtStatusFrameParser,
     ExtTelemetryFrame,
+    VersionTelemetry,
+    decode_version_frame,
     encode_auto_dock_frame,
     encode_led_beep_frame,
     encode_sos_frame,
 )
 from .serial_util import find_device_holders
+from .chassis_cmd.serial_no_reset import configure_no_reset
 
 BAUD_RATES = {
     9600: termios.B9600,
@@ -125,6 +128,10 @@ class C50CUart3Node(Node):
         # 只能人工重启服务）。静默达到该阈值即主动退出读循环，由 _run
         # 重开串口；0 = 关闭看门狗。
         self.declare_parameter('serial_starve_reopen_s', 5.0)
+        # DTR/RTS idle levels for CH9102F auto-download circuit; -1 leaves unchanged.
+        # CH9102F 一键下载电路的 DTR/RTS 空闲电平；-1 表示不修改。
+        self.declare_parameter('serial_idle_dtr', -1)
+        self.declare_parameter('serial_idle_rts', -1)
 
         # ---- 里程计候选（影子）输出：默认关闭，开启也只发影子话题 ----
         # 协方差/速度标度均为占位或未标定值——见 odom_msg 模块文档。
@@ -204,6 +211,7 @@ class C50CUart3Node(Node):
         self._dock_safety = DockSafety()
         self._uplink_parser = UplinkStreamParser()
         self._dock_target_publisher = self.create_publisher(String, '/dock/target', 10)
+        self._version_publisher = self.create_publisher(String, '/chassis/version', 10)
         self.create_subscription(String, 'drive_safety', self._on_dock_safety, 10)
         self._parser = StatusFrameParser()
         self._ext_parser = ExtStatusFrameParser()
@@ -351,6 +359,13 @@ class C50CUart3Node(Node):
             attrs[4] = attrs[5] = BAUD_RATES[self._baudrate]
             attrs[6][termios.VMIN] = attrs[6][termios.VTIME] = 0
             termios.tcsetattr(fd, termios.TCSANOW, attrs)
+            # Clear HUPCL and set safe idle DTR/RTS for the CH9102F download circuit.
+            # 清除 HUPCL 并为 CH9102F 下载电路设置安全的 DTR/RTS 空闲电平。
+            configure_no_reset(
+                fd,
+                idle_dtr=int(self.get_parameter('serial_idle_dtr').value),
+                idle_rts=int(self.get_parameter('serial_idle_rts').value),
+            )
             termios.tcflush(fd, termios.TCIFLUSH)
         except Exception:
             os.close(fd)
@@ -486,6 +501,8 @@ class C50CUart3Node(Node):
                         self._handle_ext_frame(ext_frame)
                 elif kind == 'dock_target':
                     self._handle_dock_target(raw_frame)
+                elif kind == 'version':
+                    self._handle_version(raw_frame)
                 else:
                     for frame in self._parser.feed(raw_frame):
                         self._handle_frame(frame)
@@ -670,6 +687,23 @@ class C50CUart3Node(Node):
             KeyValue(key='voltage_mv', value=str(frame.voltage_mv)),
         ]
         pub.publish(st)
+
+    def _handle_version(self, frame: bytes) -> None:
+        """Publish decoded STM32 firmware version for OTA verification.
+        发布解码后的 STM32 固件版本，用于 OTA 校验。
+        """
+        try:
+            version = decode_version_frame(frame)
+        except ValueError:
+            return
+        self._version_publisher.publish(String(data=json.dumps({
+            'version': version.version,
+            'major': version.major,
+            'minor': version.minor,
+            'patch': version.patch,
+            'chassis_type': version.chassis_type,
+            'git_sha_u32': version.git_sha_u32,
+        }, separators=(',', ':'))))
 
     def _handle_dock_target(self, frame: bytes) -> None:
         from .protocol_v3_ext import decode_dock_target

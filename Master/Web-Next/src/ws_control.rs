@@ -17,10 +17,13 @@
 //!   `last_frame_age` 仍然统计它（它是连接活性的真实信号）。
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::IntoResponse;
 use axum::response::Response;
 use futures_util::{SinkExt, StreamExt};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::mpsc::{self, Sender};
+use tokio::sync::watch;
 
 use crate::safety::{self, Hub};
 use crate::state;
@@ -36,8 +39,29 @@ const OUTBOUND_CAP: usize = 64;
 /// （与 /ws/video 的慢客户端降级同一哲学）。
 const CONTROL_SEND_TIMEOUT_MS: u64 = 2000;
 
+/// Bound reply delivery so a stalled client cannot retain its media session.
+/// 限制回执发送时间，避免停滞的客户端持有媒体会话。
+async fn send_interaction_reply(tx: &Sender<Message>, reply: Value) -> bool {
+    let send = tx.send(Message::Text(reply.to_string().into()));
+    if !matches!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(CONTROL_SEND_TIMEOUT_MS),
+            send
+        )
+        .await,
+        Ok(Ok(()))
+    ) {
+        eprintln!("WP5 回执发送失败，关闭该连接的媒体会话");
+        return false;
+    }
+    true
+}
+
 /// `/ws` 端点。
-pub async fn endpoint(upgrade: WebSocketUpgrade) -> Response {
+pub async fn endpoint(headers: HeaderMap, upgrade: WebSocketUpgrade) -> Response {
+    if !crate::interaction::origin_allowed(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
     upgrade.on_upgrade(|socket| handle_socket(socket))
 }
 
@@ -50,6 +74,82 @@ struct ConnState {
     refused_once: bool,
     /// 最近一次收到任何消息的单调时刻（CLIENT_TIMEOUT 判定）。
     last_msg_ms: u64,
+    interaction_generation: u64,
+    interaction_state: watch::Sender<u64>,
+    interaction_jobs: Sender<InteractionJob>,
+}
+
+struct InteractionJob {
+    generation: u64,
+    request_id: String,
+    msg: Value,
+}
+
+impl ConnState {
+    fn invalidate_interaction(&mut self) {
+        self.interaction_generation += 1;
+        self.interaction_state
+            .send_replace(self.interaction_generation);
+    }
+}
+
+/// Serialize service requests outside the control socket loop.
+/// 在控制连接循环之外串行处理服务请求。
+async fn interaction_worker(
+    conn: u64,
+    hub: &'static Hub,
+    mut jobs: mpsc::Receiver<InteractionJob>,
+    mut generation: watch::Receiver<u64>,
+    replies: Sender<Message>,
+) {
+    let mut active = *generation.borrow_and_update();
+    loop {
+        tokio::select! {
+            biased;
+            changed = generation.changed() => {
+                if changed.is_err() { break; }
+                let next = *generation.borrow_and_update();
+                if active != next {
+                    crate::interaction::close_owner(conn, active).await;
+                    active = next;
+                }
+            }
+            job = jobs.recv() => {
+                let Some(job) = job else { break };
+                let current = *generation.borrow();
+                if job.generation != current || !hub.manual_authenticated(conn) {
+                    let reply = json!({"t":"interaction_reply","request_id":job.request_id,"ok":false,"message":"会话已失效"});
+                    if !send_interaction_reply(&replies, reply).await { break; }
+                    continue;
+                }
+                let result = crate::interaction::execute(conn, job.generation, &job.msg).await;
+                let current = *generation.borrow();
+                if current != job.generation || !hub.manual_authenticated(conn) {
+                    crate::interaction::close_owner(conn, job.generation).await;
+                    active = *generation.borrow_and_update();
+                    continue;
+                }
+                let close_connection = job.msg.get("action").and_then(Value::as_str) == Some("create")
+                    && result.as_ref().is_err_and(|error| error.outcome_unknown);
+                if close_connection { hub.conn_closed(conn); }
+                let reply = match result {
+                    Ok(data) => json!({"t":"interaction_reply","request_id":job.request_id,"ok":true,"data":data}),
+                    Err(error) => {
+                        let message = if close_connection {
+                            format!("{}；连接将关闭，请重新登录", error.message)
+                        } else { error.message };
+                        json!({"t":"interaction_reply","request_id":job.request_id,"ok":false,"message":message})
+                    }
+                };
+                if !send_interaction_reply(&replies, reply).await { break; }
+                if close_connection {
+                    let _ = tokio::time::timeout(std::time::Duration::from_millis(CONTROL_SEND_TIMEOUT_MS), replies.send(Message::Close(None))).await;
+                    break;
+                }
+            }
+        }
+    }
+    crate::interaction::close_owner(conn, active).await;
 }
 
 pub async fn handle_socket(socket: WebSocket) {
@@ -69,7 +169,11 @@ pub async fn handle_socket(socket: WebSocket) {
         "clock_ms": clock_ms,
     })
     .to_string();
-    if sink.send(Message::Text(session_hello.into())).await.is_err() {
+    if sink
+        .send(Message::Text(session_hello.into()))
+        .await
+        .is_err()
+    {
         return;
     }
 
@@ -90,12 +194,24 @@ pub async fn handle_socket(socket: WebSocket) {
         }
     });
 
+    let (interaction_jobs, interaction_rx) = mpsc::channel(32);
+    let (interaction_state, interaction_watch) = watch::channel(0);
+    tokio::spawn(interaction_worker(
+        conn,
+        hub,
+        interaction_rx,
+        interaction_watch,
+        tx.clone(),
+    ));
     let mut state = ConnState {
         conn,
         live: false,
         page: None,
         refused_once: false,
         last_msg_ms: safety::now_ms(),
+        interaction_generation: 0,
+        interaction_state,
+        interaction_jobs,
     };
     let mut status_ticker =
         tokio::time::interval(std::time::Duration::from_millis(STATUS_PERIOD_MS));
@@ -125,6 +241,7 @@ pub async fn handle_socket(socket: WebSocket) {
             {
                 state.live = false;
                 hub.conn_closed(state.conn);
+                state.invalidate_interaction();
                 // 修复：CLIENT_TIMEOUT 强制登出必须通知前端——conn_closed 只删
                 // 服务端会话，socket 仍开，前端 ui.authed 仍为 true、登录表单
                 // 保持隐藏，所有控制操作都被服务端拒绝。后台节流页签的 view
@@ -141,9 +258,11 @@ pub async fn handle_socket(socket: WebSocket) {
         }
     }
 
-    drop(tx);
-    let _ = writer.await;
     hub.conn_closed(state.conn);
+    state.invalidate_interaction();
+    drop(state);
+    drop(tx);
+    writer.abort();
 }
 
 /// 解析并处理一条文本帧；回执在处理函数内直接入队。
@@ -190,10 +309,16 @@ async fn process_msg(
 
     // 其余控制帧进环形日志（manual_login 脱敏：只记字段名清单）。
     if kind == "manual_login" {
-        let mut fields: Vec<String> =
-            msg.as_object().map(|o| o.keys().cloned().collect()).unwrap_or_default();
+        let mut fields: Vec<String> = msg
+            .as_object()
+            .map(|o| o.keys().cloned().collect())
+            .unwrap_or_default();
         fields.sort();
         hub.ws_log_add("rx", json!({ "t": kind, "fields": fields }));
+    } else if kind == "interaction" {
+        // Keep SDP out of the control log; it contains media addresses.
+        // 信令包含媒体地址，不写入控制日志。
+        hub.ws_log_add("rx", json!({"t": kind, "action": msg.get("action")}));
     } else {
         hub.ws_log_add("rx", msg.clone());
     }
@@ -217,6 +342,7 @@ async fn process_msg(
         "cruise_set" => handle_cruise_set(hub, state, msg, tx).await,
         "ultrasonic_rearm" => handle_ultrasonic_rearm(hub, state, tx).await,
         "sensor_restart" => handle_sensor_restart(hub, state, msg, tx).await,
+        "interaction" => handle_interaction(hub, state, msg, tx).await,
         "speaker_test" => handle_speaker_test(hub, state, tx).await,
         "speaker_volume" => handle_speaker_volume(hub, state, msg, tx).await,
         "mic_record_start" => handle_mic_record_start(hub, state, tx).await,
@@ -248,6 +374,56 @@ async fn send_reply(tx: &Sender<Message>, value: Value, log: bool) {
 
 async fn send_manual_error(tx: &Sender<Message>, message: &str) {
     send_reply(tx, json!({ "t": "manual_error", "message": message }), true).await;
+}
+
+/// Keep legacy device writers out of the WP5 audio ownership path.
+/// 阻止旧设备写入路径绕过 WP5 音频所有权。
+async fn reject_legacy_audio(tx: &Sender<Message>) -> bool {
+    if !crate::interaction::enabled() {
+        return false;
+    }
+    send_reply(
+        tx,
+        json!({"t":"sensor_status","ok":false,
+        "message":"WP5 已接管音频，请使用对讲、喊话或离线语音功能"}),
+        false,
+    )
+    .await;
+    true
+}
+
+/// Authenticate each signaling request on the existing control connection.
+/// 在现有控制连接上逐条鉴权信令请求。
+async fn handle_interaction(
+    hub: &'static Hub,
+    state: &ConnState,
+    msg: &Value,
+    tx: &Sender<Message>,
+) {
+    let request_id = msg.get("request_id").and_then(Value::as_str);
+    let Some(request_id) = request_id.filter(|id| !id.is_empty() && id.len() <= 80) else {
+        send_manual_error(tx, "WP5 请求标识缺失或过长").await;
+        return;
+    };
+    let result = if let Err(error) = require_drive_auth(hub, state) {
+        Err(error)
+    } else if state.page.as_deref() != Some("control") {
+        Err("请先进入控制页面")
+    } else {
+        state
+            .interaction_jobs
+            .try_send(InteractionJob {
+                generation: state.interaction_generation,
+                request_id: request_id.to_string(),
+                msg: msg.clone(),
+            })
+            .map_err(|_| "音视频请求繁忙")
+    };
+    if let Err(message) = result {
+        let reply =
+            json!({"t":"interaction_reply","request_id":request_id,"ok":false,"message":message});
+        let _ = tx.try_send(Message::Text(reply.to_string().into()));
+    }
 }
 
 /// `motion_license`：100ms Worker 心跳。不要求登录——许可只决定
@@ -333,7 +509,14 @@ async fn handle_license_release(hub: &'static Hub, msg: &Value) {
 /// `view`：页面心跳（1Hz）。先处理 view 再处理手动消息的顺序由
 /// 上层调用顺序保证（web_debug.py:2608-2636）。
 async fn handle_view(hub: &'static Hub, state: &mut ConnState, msg: &Value, tx: &Sender<Message>) {
-    let page = msg.get("page").and_then(Value::as_str).unwrap_or("idle").to_string();
+    let page = msg
+        .get("page")
+        .and_then(Value::as_str)
+        .unwrap_or("idle")
+        .to_string();
+    if state.page.as_deref() == Some("control") && page != "control" {
+        state.invalidate_interaction();
+    }
     if page == "control" && !hub.manual_logged_in(state.conn) {
         // 控制页未登录：提示一次，live 保持 false。
         if state.live || !state.refused_once {
@@ -360,6 +543,9 @@ async fn handle_login(hub: &'static Hub, state: &mut ConnState, msg: &Value, tx:
     let password = msg.get("password").and_then(Value::as_str).unwrap_or("");
     let session_id = msg.get("session_id").and_then(Value::as_str);
     let ok = hub.manual_login_with_session(state.conn, username, password, session_id);
+    if !ok {
+        state.invalidate_interaction();
+    }
     send_reply(tx, json!({ "t": "manual_auth", "ok": ok }), true).await;
     if ok && state.page.as_deref() == Some("control") {
         // 蓝图语义「已登录 + 在控制页」即刻成立：登录成功时若本连接已经
@@ -370,11 +556,19 @@ async fn handle_login(hub: &'static Hub, state: &mut ConnState, msg: &Value, tx:
 }
 
 /// `manual_start`：接管底盘控制（自动取消正在进行的巡航/导航）。
-async fn handle_manual_start(hub: &'static Hub, state: &ConnState, msg: &Value, tx: &Sender<Message>) {
+async fn handle_manual_start(
+    hub: &'static Hub,
+    state: &ConnState,
+    msg: &Value,
+    tx: &Sender<Message>,
+) {
     let speed = msg.get("speed").and_then(Value::as_f64).unwrap_or(f64::NAN);
     let mode = msg.get("mode").and_then(Value::as_str).unwrap_or("");
     let duration = msg.get("duration").and_then(Value::as_f64);
-    let direction = msg.get("direction").and_then(Value::as_str).unwrap_or("forward");
+    let direction = msg
+        .get("direction")
+        .and_then(Value::as_str)
+        .unwrap_or("forward");
     match hub.manual_start(state.conn, speed, mode, duration, direction, state.live) {
         Ok(()) => {
             // ros 模式：手动接管成功即 flush 最新 (vx,wz)（旧 manual_forward
@@ -394,7 +588,12 @@ async fn handle_manual_start(hub: &'static Hub, state: &ConnState, msg: &Value, 
 }
 
 /// `cruise_set`：切换自动避障巡航开关。蓝图 §4.3(1)：已登录 + control 页。
-async fn handle_cruise_set(hub: &'static Hub, state: &ConnState, msg: &Value, tx: &Sender<Message>) {
+async fn handle_cruise_set(
+    hub: &'static Hub,
+    state: &ConnState,
+    msg: &Value,
+    tx: &Sender<Message>,
+) {
     if !hub.manual_authenticated(state.conn) {
         send_manual_error(tx, "请先登录手动控制").await;
         return;
@@ -448,7 +647,11 @@ async fn handle_ultrasonic_rearm(hub: &'static Hub, state: &ConnState, tx: &Send
     } else {
         hub.ultrasonic_rearm()
     };
-    let kind = if ok { "ultrasonic_status" } else { "manual_error" };
+    let kind = if ok {
+        "ultrasonic_status"
+    } else {
+        "manual_error"
+    };
     send_reply(tx, json!({ "t": kind, "ok": ok, "message": info }), true).await;
 }
 
@@ -495,27 +698,30 @@ async fn handle_sensor_restart(
                 .args(["--user", "restart", &unit])
                 .output()
         });
-        let (ok, message) = match tokio::time::timeout(
-            std::time::Duration::from_secs(45),
-            job,
-        )
-        .await
-        {
-            // 三层 Result：外层超时 → spawn_blocking JoinError → 命令执行结果
-            Err(_) => (false, format!("{label}重启超时（45s），请到板上查看服务状态")),
-            Ok(Err(e)) => (false, format!("{label}重启失败：{e}")),
-            Ok(Ok(Err(e))) => (false, format!("{label}重启失败：{e}")),
-            Ok(Ok(Ok(out))) if out.status.success() => (true, format!("{label}服务已重启")),
-            Ok(Ok(Ok(out))) => (
-                false,
-                format!(
-                    "{label}重启失败：{}",
-                    String::from_utf8_lossy(&out.stderr).trim()
+        let (ok, message) =
+            match tokio::time::timeout(std::time::Duration::from_secs(45), job).await {
+                // 三层 Result：外层超时 → spawn_blocking JoinError → 命令执行结果
+                Err(_) => (
+                    false,
+                    format!("{label}重启超时（45s），请到板上查看服务状态"),
                 ),
-            ),
-        };
-        send_reply(&tx, json!({ "t": "sensor_status", "ok": ok, "message": message }), true)
-            .await;
+                Ok(Err(e)) => (false, format!("{label}重启失败：{e}")),
+                Ok(Ok(Err(e))) => (false, format!("{label}重启失败：{e}")),
+                Ok(Ok(Ok(out))) if out.status.success() => (true, format!("{label}服务已重启")),
+                Ok(Ok(Ok(out))) => (
+                    false,
+                    format!(
+                        "{label}重启失败：{}",
+                        String::from_utf8_lossy(&out.stderr).trim()
+                    ),
+                ),
+            };
+        send_reply(
+            &tx,
+            json!({ "t": "sensor_status", "ok": ok, "message": message }),
+            true,
+        )
+        .await;
     });
 }
 
@@ -524,6 +730,9 @@ async fn handle_sensor_restart(
 /// ws 任务。fake 模式没有声卡硬件也要真响（本机若有 aplay 就照放，失败
 /// 原样回错，不冒充成功）。
 async fn handle_speaker_test(hub: &'static Hub, state: &ConnState, tx: &Sender<Message>) {
+    if reject_legacy_audio(tx).await {
+        return;
+    }
     if let Err(e) = require_drive_auth(hub, state) {
         send_manual_error(tx, e).await;
         return;
@@ -539,14 +748,26 @@ async fn handle_speaker_test(hub: &'static Hub, state: &ConnState, tx: &Sender<M
                 (true, format!("已播放三声测试音（{dev}）"))
             }
         };
-        send_reply(&tx, json!({ "t": "sensor_status", "ok": ok, "message": message }), true)
-            .await;
+        send_reply(
+            &tx,
+            json!({ "t": "sensor_status", "ok": ok, "message": message }),
+            true,
+        )
+        .await;
     });
 }
 
 /// `speaker_volume`：调喇叭音量（0–100 %，映射到 es8388 的 `PCM` 混音
 /// 控件）。每次都真写 amixer 并回读，回包带 `volume` 供滑块校正。
-async fn handle_speaker_volume(hub: &'static Hub, state: &ConnState, msg: &Value, tx: &Sender<Message>) {
+async fn handle_speaker_volume(
+    hub: &'static Hub,
+    state: &ConnState,
+    msg: &Value,
+    tx: &Sender<Message>,
+) {
+    if reject_legacy_audio(tx).await {
+        return;
+    }
     if let Err(e) = require_drive_auth(hub, state) {
         send_manual_error(tx, e).await;
         return;
@@ -574,18 +795,30 @@ async fn handle_speaker_volume(hub: &'static Hub, state: &ConnState, msg: &Value
 }
 
 fn mic_stop_message(info: &crate::mic::StopInfo, auto_stopped: bool) -> String {
-    let low_hint =
-        if info.peak < crate::mic::NORM_MIN_PEAK { "，音量极低请靠近说话" } else { "" };
-    if auto_stopped {
-        format!("录音已达上限并自动结束（{:.1}s{low_hint}）", info.duration_s)
+    let low_hint = if info.peak < crate::mic::NORM_MIN_PEAK {
+        "，音量极低请靠近说话"
     } else {
-        format!("录音完成，时长 {:.1}s（{}{low_hint}）", info.duration_s, info.label)
+        ""
+    };
+    if auto_stopped {
+        format!(
+            "录音已达上限并自动结束（{:.1}s{low_hint}）",
+            info.duration_s
+        )
+    } else {
+        format!(
+            "录音完成，时长 {:.1}s（{}{low_hint}）",
+            info.duration_s, info.label
+        )
     }
 }
 
 /// `mic_record_start`：启动板上麦克风录音（raw ALSA `arecord`，最长 60s），
 /// 并挂 61s 自动停止看护任务以免连接断开后写满 `/tmp`。
 async fn handle_mic_record_start(hub: &'static Hub, state: &ConnState, tx: &Sender<Message>) {
+    if reject_legacy_audio(tx).await {
+        return;
+    }
     if let Err(e) = require_drive_auth(hub, state) {
         send_manual_error(tx, e).await;
         return;
@@ -616,10 +849,9 @@ async fn handle_mic_record_start(hub: &'static Hub, state: &ConnState, tx: &Send
                         crate::mic::MAX_RECORD_SECS + 1,
                     ))
                     .await;
-                    if let Ok(Ok(Some(stop))) = tokio::task::spawn_blocking(move || {
-                        crate::mic::stop_if_generation(rec_gen)
-                    })
-                    .await
+                    if let Ok(Ok(Some(stop))) =
+                        tokio::task::spawn_blocking(move || crate::mic::stop_if_generation(rec_gen))
+                            .await
                     {
                         send_reply(
                             &tx_auto,
@@ -690,6 +922,9 @@ async fn handle_mic_record_stop(hub: &'static Hub, state: &ConnState, tx: &Sende
 
 /// `mic_play`：经车体喇叭（es8388 `aplay`）播放最近录制的音频。
 async fn handle_mic_play(hub: &'static Hub, state: &ConnState, tx: &Sender<Message>) {
+    if reject_legacy_audio(tx).await {
+        return;
+    }
     if let Err(e) = require_drive_auth(hub, state) {
         send_manual_error(tx, e).await;
         return;
@@ -729,11 +964,17 @@ async fn handle_mic_play(hub: &'static Hub, state: &ConnState, tx: &Sender<Messa
     tokio::spawn(async move {
         let task = tokio::task::spawn_blocking(move || crate::mic::finish_play(job));
         let (ok, message, mic_snap) = match task.await {
-            Err(e) => (false, format!("播放录音失败：{e}"), crate::mic::status_snapshot()),
-            Ok(Err(e)) => (false, format!("播放录音失败：{e}"), crate::mic::status_snapshot()),
-            Ok(Ok((dur, _dev, snap))) => {
-                (true, format!("录音播放完成（{:.1}s）", dur), snap)
-            }
+            Err(e) => (
+                false,
+                format!("播放录音失败：{e}"),
+                crate::mic::status_snapshot(),
+            ),
+            Ok(Err(e)) => (
+                false,
+                format!("播放录音失败：{e}"),
+                crate::mic::status_snapshot(),
+            ),
+            Ok(Ok((dur, _dev, snap))) => (true, format!("录音播放完成（{:.1}s）", dur), snap),
         };
         send_reply(
             &tx,
@@ -751,7 +992,12 @@ async fn handle_mic_play(hub: &'static Hub, state: &ConnState, tx: &Sender<Messa
 }
 
 /// ros 模式走真实链路并等待真实结果；fake 模式保留假回执（无 AMCL）。
-async fn handle_relocalize(hub: &'static Hub, state: &ConnState, msg: &Value, tx: &Sender<Message>) {
+async fn handle_relocalize(
+    hub: &'static Hub,
+    state: &ConnState,
+    msg: &Value,
+    tx: &Sender<Message>,
+) {
     if let Err(e) = require_drive_auth(hub, state) {
         send_manual_error(tx, e).await;
         return;
@@ -794,8 +1040,14 @@ async fn handle_relocalize(hub: &'static Hub, state: &ConnState, msg: &Value, tx
                 let x = detail.get("x").and_then(Value::as_f64).unwrap_or(0.0);
                 let y = detail.get("y").and_then(Value::as_f64).unwrap_or(0.0);
                 let yaw_deg = detail.get("yaw_deg").and_then(Value::as_f64).unwrap_or(0.0);
-                let hit = detail.get("hit_ratio").and_then(Value::as_f64).unwrap_or(0.0);
-                let ms = detail.get("match_ms").and_then(Value::as_f64).unwrap_or(0.0);
+                let hit = detail
+                    .get("hit_ratio")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0);
+                let ms = detail
+                    .get("match_ms")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0);
                 send_reply(
                     &tx,
                     json!({ "t": "relocalize_status", "ok": true, "x": x, "y": y,
@@ -835,13 +1087,21 @@ async fn handle_relocalize(hub: &'static Hub, state: &ConnState, msg: &Value, tx
     });
 }
 
-async fn handle_patrol_save(hub: &'static Hub, state: &ConnState, msg: &Value, tx: &Sender<Message>) {
+async fn handle_patrol_save(
+    hub: &'static Hub,
+    state: &ConnState,
+    msg: &Value,
+    tx: &Sender<Message>,
+) {
     if let Err(e) = require_drive_auth(hub, state) {
         send_manual_error(tx, e).await;
         return;
     }
     let points = msg.get("points").cloned().unwrap_or(Value::Null);
-    let map_id = msg.get("map_id").and_then(Value::as_str).map(str::to_string);
+    let map_id = msg
+        .get("map_id")
+        .and_then(Value::as_str)
+        .map(str::to_string);
     let (ok, message) = hub.patrol_save(&points, map_id.as_deref());
     let mut frame = hub.patrol_status_frame();
     frame["t"] = json!("patrol_status");
