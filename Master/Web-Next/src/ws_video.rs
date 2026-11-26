@@ -154,6 +154,9 @@ fn build_frames(
 
     // 相机帧：仅存在已登录且在控制页的会话时推送（看/开分离）。
     if media.image_seq != *last_img_seq
+        // WP5 video travels over WHEP; retain this channel for maps and scans.
+        // WP5 视频通过 WHEP 传输；本通道保留地图与雷达数据。
+        && !crate::interaction::enabled()
         && !media.image_b64.is_empty()
         && now >= *next_img
         && hub.has_live_control()

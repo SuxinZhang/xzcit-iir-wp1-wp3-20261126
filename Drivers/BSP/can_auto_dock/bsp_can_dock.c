@@ -11,6 +11,12 @@
 #include "main.h"
 #endif
 
+/* CAN1 is initialized and exchanged through direct bxCAN registers below, not
+ * HAL CAN APIs. Keep HAL_CAN_MODULE_ENABLED disabled and do not add a HAL CAN
+ * source file unless this driver is intentionally migrated to HAL.
+ * CAN1 的初始化与收发均在下方直接操作 bxCAN 寄存器，不使用 HAL CAN API；
+ * 保持 HAL_CAN_MODULE_ENABLED 关闭，除非有意迁移到 HAL，否则不要添加 HAL CAN 源文件。 */
+
 #include <stddef.h>
 #include <string.h>
 

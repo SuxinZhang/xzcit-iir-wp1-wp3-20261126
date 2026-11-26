@@ -57,6 +57,13 @@ def generate_launch_description():
         DeclareLaunchArgument('vision_model_file', default_value=''),
         DeclareLaunchArgument('camera_calibration_file', default_value=''),
         DeclareLaunchArgument('ground_calibration_file', default_value=''),
+        # WP4 inspection vision stays opt-in until a measured model and labels are supplied.
+        # 在提供实测模型与标签前，WP4 巡检视觉保持可选启用。
+        DeclareLaunchArgument('enable_inspection_vision', default_value='false'),
+        DeclareLaunchArgument('inspection_backend', default_value='auto'),
+        DeclareLaunchArgument('inspection_model_file', default_value=''),
+        DeclareLaunchArgument('inspection_labels_file', default_value=''),
+        DeclareLaunchArgument('inspection_capture_dir', default_value='~/.cache/iir/captures'),
         DeclareLaunchArgument('body_half_length', default_value='0.0'),
         DeclareLaunchArgument('body_half_width', default_value='0.0'),
         DeclareLaunchArgument('body_center_x', default_value='0.0'),
@@ -100,6 +107,17 @@ def generate_launch_description():
                  'ground_calibration_file': LaunchConfiguration('ground_calibration_file'),
              }]),
 
+        # WP4 inspection capture also reuses the shared camera stream.
+        # WP4 巡检抓拍同样复用共享相机流。
+        Node(package='iir_vision_rknn', executable='inspection_vision_node',
+             name='iir_vision_rknn', output='screen',
+             condition=IfCondition(LaunchConfiguration('enable_inspection_vision')),
+             parameters=[{
+                 'backend': LaunchConfiguration('inspection_backend'),
+                 'model_file': LaunchConfiguration('inspection_model_file'),
+                 'labels_file': LaunchConfiguration('inspection_labels_file'),
+                 'capture_dir': LaunchConfiguration('inspection_capture_dir'),
+             }]),
 
         Node(
             package='opi_robot',

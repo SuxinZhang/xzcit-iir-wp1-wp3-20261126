@@ -1,0 +1,15 @@
+/**
+ * @file fw_version.h.in
+ * @brief CMake-generated firmware version metadata template.
+ *        CMake 生成的固件版本元数据模板。
+ */
+#ifndef IIR_APP_PROTOCOL_FW_VERSION_H
+#define IIR_APP_PROTOCOL_FW_VERSION_H
+
+#define IIR_FW_VERSION_MAJOR @IIR_FW_VERSION_MAJOR@
+#define IIR_FW_VERSION_MINOR @IIR_FW_VERSION_MINOR@
+#define IIR_FW_VERSION_PATCH @IIR_FW_VERSION_PATCH@
+#define IIR_GIT_SHA "@IIR_GIT_SHA@"
+#define IIR_CHASSIS_TYPE "@CHASSIS_TYPE@"
+
+#endif /* IIR_APP_PROTOCOL_FW_VERSION_H */

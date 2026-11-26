@@ -14,6 +14,7 @@
   var F = Store.FLAGS;
   var Scheduler = C.Scheduler;
   var ui = Store.state.ui;
+  var interaction;
 
   function $(id) { return document.getElementById(id); }
 
@@ -208,9 +209,9 @@
     return false;
   }
 
-  /* ================= 路由（#/overview /control /map /logs） ================= */
+  /* ================= 路由（#/overview /control /inspection /ota /logs） ================= */
 
-  var PAGE_TITLES = { overview: '概览', control: '控制', logs: '日志' };
+  var PAGE_TITLES = { overview: '概览', control: '控制', inspection: '巡检', ota: '系统升级', logs: '日志' };
 
   function pageFromHash() {
     var h = location.hash.replace(/^#\/?/, '');
@@ -220,6 +221,7 @@
   function applyRoute(page, first) {
     var prev = ui.page;
     ui.page = page;
+    if (page !== 'control' && interaction) interaction.stopAll();
 
     var swap = function () {
       for (var key in PAGE_TITLES) {
@@ -246,6 +248,10 @@
 
     C.Spotlight.refresh();
     C.WS.setPage(page);
+    // The inspection centre owns its gateway connection and refresh timer.
+    // 巡检中心自行管理网关连接与刷新定时器。
+    if (C.Inspection && C.Inspection.setPage) C.Inspection.setPage(page);
+    if (C.OTA && C.OTA.setPage) C.OTA.setPage(page);
     if (page === 'logs') fetchLogs();
     if (prev !== page && prev === 'control') releaseAll();
     // 地图已并入控制页第三 tab：切到地图 tab 时补标 MAPTEX（setCtlTab）。
@@ -303,6 +309,7 @@
       $(id).disabled = !on;
     });
     if (!on) {
+      if (interaction) interaction.stopAll();
       releaseAll();
       if (ui.gear !== 0) setGear(0);
     } else if (document.activeElement && typeof document.activeElement.blur === 'function') {
@@ -1554,6 +1561,48 @@
     if (list._lastHtml !== html) { list._lastHtml = html; list.innerHTML = html; }
   }
 
+  function bindInteraction() {
+    interaction = C.Interaction.create({
+      onState: function (kind, message) {
+        if (kind === 'error') { toast(message, 'bad'); return; }
+        if (kind === 'audio' || kind === 'publish' || kind === 'microphone') {
+          $('interaction-audio-status').textContent = message;
+          if (kind === 'audio' && message === '已结束') $('interaction-audio').srcObject = null;
+        }
+        if (kind === 'video' || kind === 'camera') {
+          $('interaction-video-status').textContent = message;
+          if (kind === 'camera' && message === '媒体已连接') {
+            $('cam').hidden = true;
+            $('interaction-video').hidden = false;
+          }
+          if (kind === 'video' && message === '已结束') {
+            $('interaction-video').srcObject = null;
+            $('interaction-video').hidden = true;
+            $('cam').hidden = false;
+          }
+        }
+      },
+      onTrack: function (kind, stream) {
+        var element = $(kind === 'camera' ? 'interaction-video' : 'interaction-audio');
+        element.srcObject = stream;
+        element.play().catch(function (error) { toast(error.message, 'bad'); });
+      },
+    });
+    function startAudio(mode) {
+      if (!requireAuth('实时音频')) return;
+      interaction.startAudio(mode).catch(function (error) { toast(error.message, 'bad'); });
+    }
+    $('interaction-intercom').addEventListener('click', function () { startAudio('intercom'); });
+    $('interaction-announcement').addEventListener('click', function () { startAudio('remote_announcement'); });
+    $('interaction-audio-stop').addEventListener('click', function () { interaction.stopAudio(); });
+    $('interaction-video-start').addEventListener('click', function () {
+      if (!requireAuth('实时视频')) return;
+      interaction.startVideo().catch(function (error) { toast(error.message, 'bad'); });
+    });
+    $('interaction-video-stop').addEventListener('click', function () { interaction.stopVideo(); });
+    document.addEventListener('visibilitychange', function () { if (document.hidden) interaction.stopAll(); });
+  }
+
   /* ================= 启动 ================= */
 
   function boot() {
@@ -1568,6 +1617,7 @@
     bindSideToggle();
     bindVerdictToggle();
     bindAuth();
+    bindInteraction();
     bindCtlTabs();
     bindManual();
     bindMap();

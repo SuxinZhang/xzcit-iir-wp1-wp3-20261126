@@ -1,0 +1,19 @@
+[Unit]
+PartOf=iir.target
+Description=IIR inspection Gateway
+Requires=network-online.target
+After=network-online.target iir-web.service
+Wants=network-online.target
+
+[Service]
+Type=exec
+EnvironmentFile=%h/.config/iir/wp5.env
+Environment=OPI_GATEWAY_BACKEND=ros
+Environment=OPI_GATEWAY_HOST=127.0.0.1
+Environment=OPI_GATEWAY_PORT=8089
+Environment=OPI_GATEWAY_MEDIA_DIR=%h/.cache/iir/captures
+WorkingDirectory=${IIR_DEPLOY_DIR}/../Master/Gateway
+ExecStart=/usr/bin/env ${IIR_PYTHON} -m app
+
+[Install]
+WantedBy=default.target

@@ -29,8 +29,10 @@
   function connChanged() { Store.mark(F.CONN); }
 
   function viewPage() {
-    // 蓝图 §4.3(1)：page 取值 overview|control|map|idle；logs 页不占实时会话
-    return ui.page === 'logs' ? 'idle' : ui.page;
+    // Blueprint 4.3(1): page is overview|control|map|idle; logs and the
+    // inspection centre do not hold a live chassis session.
+    // 蓝图 4.3(1)：page 取值为 overview|control|map|idle；日志与巡检中心页不占用实时底盘会话。
+    return (ui.page === 'logs' || ui.page === 'inspection') ? 'idle' : ui.page;
   }
 
   /* ------------------------------------------------------------------
@@ -132,6 +134,9 @@
         // 通用 toast 之外再广播整帧（音量回执带板端回读值，app.js 用它定值）
         Store.emit('toast', { kind: m.ok ? 'ok' : 'bad', message: m.message || '' });
         Store.emit('sensor_reply', m);
+        break;
+      case 'interaction_reply':
+        Store.emit('interaction_reply', m);
         break;
       case 'mic_status':
         if (m.message) {

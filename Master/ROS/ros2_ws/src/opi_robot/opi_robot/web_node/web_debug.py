@@ -241,6 +241,9 @@ _patrol = {
     # runner 的锁停通道：Bridge 启动时换成发下游的版本（见
     # patrol_downstream_attach），之前是 no-op。
     'lock_sink': lambda reason: None,
+    # Optional WP4 capture callback fired on successful waypoint arrival.
+    # 可选 WP4 抓拍回调，在航点成功到达时触发。
+    'waypoint_hook': None,
 }
 
 # 会话存活判定的节拍（秒）。与 select 轮询周期同量级，不额外占 CPU。
@@ -559,8 +562,10 @@ def patrol_status_frame(now=None):
 
 
 def configure_patrol(reset_runner=False, map_yaml=None, goal_queue=None,
-                     now=None):
+                     now=None, waypoint_hook=None):
     """建立/重建巡航状态机与许可监视（Bridge 启动、测试复位时调）。"""
+    if waypoint_hook is not None:
+        _patrol['waypoint_hook'] = waypoint_hook
     if map_yaml is not None:
         _patrol['map_yaml'] = map_yaml
     if goal_queue is not None:
@@ -582,7 +587,8 @@ def configure_patrol(reset_runner=False, map_yaml=None, goal_queue=None,
         # 在 Bridge 启动时接上；之前的调用落在 no-op 里（离线环境）。
         _patrol['runner'] = P.PatrolRunner(
             _patrol_dispatch, _patrol_cancel,
-            _patrol['lock_sink'], now or _patrol_now)
+            _patrol['lock_sink'], now or _patrol_now,
+            on_waypoint=_patrol.get('waypoint_hook'))
         _patrol['route'] = None
         _patrol['live_t'] = None
         _patrol['session_lost'] = ''
@@ -1502,6 +1508,13 @@ class Bridge(Node):
         _pp = self.declare_parameter('patrol_map_yaml', '')
         _pv = getattr(_pp, 'value', '')
         self._patrol_map_yaml = _pv if isinstance(_pv, str) and _pv else None
+        # WP4 hook is optional; absence of iir_interfaces must not block Web control.
+        # WP4 钩子可选；缺少 iir_interfaces 不得阻塞网页控制。
+        try:
+            from .inspection_capture import build_capture_hook
+            _patrol['waypoint_hook'] = build_capture_hook(self)
+        except Exception:              # pragma: no cover - 仅坏环境
+            _patrol['waypoint_hook'] = None
         configure_patrol(reset_runner=True, map_yaml=self._patrol_map_yaml)
         _patrol['publisher'] = None
         try:
